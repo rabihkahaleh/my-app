@@ -1,6 +1,7 @@
 import express from 'express';
 import nodemailer from 'nodemailer';
 import cors from 'cors';
+import OpenAI from 'openai';
 
 const app = express();
 app.use(cors());
@@ -85,6 +86,59 @@ Return ONLY the paragraph text, nothing else.`;
       res.json({ success: false, error: 'No response from Gemini' });
     }
   } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+// Generate business role paragraph using GPT-3.5
+app.post('/api/generate-business-intro', async (req, res) => {
+  const { apiKey, name, jobTitle } = req.body;
+
+  if (!apiKey) {
+    return res.json({ success: false, error: 'OpenAI API key is required' });
+  }
+
+  const prompt = `You are writing a professional email invitation on behalf of Rabih Kahaleh from the University of Balamand, inviting someone to join the "AI in Action: Business Automation & Decision-Making Certificate Program".
+
+The program equips professionals with the skills to apply AI in real business workflows—particularly in decision support, reporting, process automation, and productivity—without requiring any programming background.
+
+Write ONLY a single paragraph (3-4 sentences) explaining why this certificate is especially relevant for the following person:
+- Name: ${name}
+- Job Title/Role: ${jobTitle}
+
+The paragraph MUST:
+- Start with "Given your role as ${jobTitle}, I believe you may find this certificate especially relevant because"
+- Explain specifically how AI can enhance their particular role/profession with concrete examples
+- Focus on practical business applications (not education/teaching)
+- Be warm, professional, and specific to their role
+- NOT include any greeting, sign-off, or bullet points
+- NOT mention registration, dates, fees, or program details
+
+Return ONLY the paragraph text, nothing else.`;
+
+  console.log(`[GPT] Generating business intro for: ${name} (${jobTitle})`);
+
+  try {
+    const client = new OpenAI({ apiKey });
+    const completion = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'You are a professional email copywriter specializing in business and AI training program invitations.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 300,
+    });
+
+    const text = completion.choices?.[0]?.message?.content?.trim();
+    if (text) {
+      console.log(`[GPT OK] Generated intro for: ${name}`);
+      res.json({ success: true, intro: text });
+    } else {
+      res.json({ success: false, error: 'No response from GPT' });
+    }
+  } catch (error) {
+    console.error(`[GPT FAIL] ${name}: ${error.message}`);
     res.json({ success: false, error: error.message });
   }
 });

@@ -189,7 +189,7 @@ function generateBusinessRoleParagraph(jobTitle) {
 function generateBusinessEmail(fullName, jobTitle, aiIntro, title) {
   const name = fullName?.trim() || 'Participant';
   const greeting = title ? `${title} ${name}` : name;
-  const roleParagraph = generateBusinessRoleParagraph(jobTitle);
+  const roleParagraph = aiIntro || generateBusinessRoleParagraph(jobTitle);
 
   return `
 <div style="font-family: Calibri, Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
@@ -276,12 +276,18 @@ function App() {
   const [statusMsg, setStatusMsg] = useState('');
   const fileInputRef = useRef(null);
 
-  // Gemini AI state
-  const [geminiKey, setGeminiKey] = useState('AIzaSyBRQ7XjoEFXh0aoPlszcxnsWIawa1DAegc');
+  // Gemini AI state (education)
+  const [geminiKey, setGeminiKey] = useState(import.meta.env.VITE_GEMINI_API_KEY || '');
   const [aiIntros, setAiIntros] = useState({});
   const [generating, setGenerating] = useState(false);
   const [genProgress, setGenProgress] = useState({ current: 0, total: 0 });
   const [sendingOne, setSendingOne] = useState(null);
+
+  // OpenAI GPT state (business)
+  const [openaiKey, setOpenaiKey] = useState(import.meta.env.VITE_OPENAI_API_KEY || '');
+  const [businessIntros, setBusinessIntros] = useState({});
+  const [generatingBusiness, setGeneratingBusiness] = useState(false);
+  const [businessGenProgress, setBusinessGenProgress] = useState({ current: 0, total: 0 });
 
   const currentProgram = PROGRAMS[program];
 
@@ -398,6 +404,64 @@ function App() {
     setGenerating(false);
   };
 
+  const handleGenerateBusinessIntros = async () => {
+    if (!openaiKey) {
+      setStatusMsg('Please enter your OpenAI API key first.');
+      return;
+    }
+
+    const toGenerate = contacts.filter(c => selected.has(c.id));
+    if (toGenerate.length === 0) return;
+
+    setGeneratingBusiness(true);
+    setBusinessGenProgress({ current: 0, total: toGenerate.length });
+    setStatusMsg(`Generating business intros with GPT... 0/${toGenerate.length}`);
+    const newIntros = { ...businessIntros };
+
+    for (let i = 0; i < toGenerate.length; i++) {
+      const c = toGenerate[i];
+
+      if (newIntros[c.id]) {
+        setBusinessGenProgress({ current: i + 1, total: toGenerate.length });
+        setStatusMsg(`Generating business intros with GPT... ${i + 1}/${toGenerate.length}`);
+        continue;
+      }
+
+      try {
+        const res = await fetch(`${API_URL}/generate-business-intro`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: openaiKey,
+            name: c.full_name,
+            jobTitle: c.job_title,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          newIntros[c.id] = data.intro;
+        } else {
+          console.error(`Failed for ${c.full_name}: ${data.error}`);
+          setStatusMsg(`GPT error for ${c.full_name}: ${data.error}`);
+        }
+      } catch (err) {
+        console.error(`Error for ${c.full_name}: ${err.message}`);
+      }
+
+      setBusinessGenProgress({ current: i + 1, total: toGenerate.length });
+      setStatusMsg(`Generating business intros with GPT... ${i + 1}/${toGenerate.length}`);
+
+      if (i < toGenerate.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    setBusinessIntros(newIntros);
+    const generatedCount = Object.keys(newIntros).length;
+    setStatusMsg(`Done! ${generatedCount} GPT-personalized business intros generated.`);
+    setGeneratingBusiness(false);
+  };
+
   const updateTitle = (id, newTitle) => {
     setContacts(prev => prev.map(c => c.id === id ? { ...c, title: newTitle } : c));
   };
@@ -426,10 +490,13 @@ function App() {
     setSendResults([]);
     setStatusMsg(`Sending ${toSend.length} emails...`);
 
-    const emails = toSend.map(c => ({
-      to: c.email,
-      html: generateEmailHTML(program, c.full_name, c.job_title, aiIntros[c.id] || null, c.title),
-    }));
+    const emails = toSend.map(c => {
+      const intro = program === 'business' ? (businessIntros[c.id] || null) : (aiIntros[c.id] || null);
+      return {
+        to: c.email,
+        html: generateEmailHTML(program, c.full_name, c.job_title, intro, c.title),
+      };
+    });
 
     try {
       const res = await fetch(`${API_URL}/send-batch`, {
@@ -467,7 +534,7 @@ function App() {
           cc: currentProgram.cc,
           bcc: currentProgram.bcc,
           subject,
-          html: generateEmailHTML(program, contact.full_name, contact.job_title, aiIntros[contact.id] || null, contact.title),
+          html: generateEmailHTML(program, contact.full_name, contact.job_title, program === 'business' ? (businessIntros[contact.id] || null) : (aiIntros[contact.id] || null), contact.title),
         }),
       });
       const data = await res.json();
@@ -603,10 +670,46 @@ function App() {
         </section>
       )}
 
+      {/* GPT AI Personalization - only for business */}
+      {contacts.length > 0 && program === 'business' && (
+        <section className="card">
+          <h2>3. AI Personalization (GPT-3.5)</h2>
+          <p className="section-desc">
+            Enter your OpenAI API key to generate a unique, personalized role paragraph for each contact using GPT-3.5.
+          </p>
+          <div className="form-row">
+            <label>
+              OpenAI API Key
+              <input
+                type="password"
+                value={openaiKey}
+                onChange={e => setOpenaiKey(e.target.value)}
+                placeholder="Paste your OpenAI API key here"
+              />
+            </label>
+            <button
+              onClick={handleGenerateBusinessIntros}
+              disabled={generatingBusiness || !openaiKey}
+              className="btn-generate"
+            >
+              {generatingBusiness
+                ? `Generating... ${businessGenProgress.current}/${businessGenProgress.total}`
+                : `Generate Intros for ${selected.size} Contacts`
+              }
+            </button>
+          </div>
+          {Object.keys(businessIntros).length > 0 && (
+            <div className="status success">
+              {Object.keys(businessIntros).length} GPT-personalized intros ready
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Email Subject */}
       {contacts.length > 0 && (
         <section className="card">
-          <h2>{program === 'education' ? '4' : '3'}. Email Subject</h2>
+          <h2>4. Email Subject</h2>
           <input
             type="text"
             className="subject-input"
@@ -619,7 +722,7 @@ function App() {
       {/* Contacts Table */}
       {contacts.length > 0 && (
         <section className="card">
-          <h2>{program === 'education' ? '5' : '4'}. Contacts ({selected.size} of {contacts.length} selected)</h2>
+          <h2>5. Contacts ({selected.size} of {contacts.length} selected)</h2>
           <table className="contacts-table">
             <thead>
               <tr>
@@ -635,7 +738,7 @@ function App() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Job Title</th>
-                {program === 'education' && <th>AI Intro</th>}
+                <th>AI Intro</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -668,15 +771,21 @@ function App() {
                     <td>{c.full_name}</td>
                     <td>{c.email}</td>
                     <td>{c.job_title}</td>
-                    {program === 'education' && (
-                      <td>
-                        {aiIntros[c.id] ? (
+                    <td>
+                      {program === 'education' ? (
+                        aiIntros[c.id] ? (
                           <span className="badge sent">Ready</span>
                         ) : (
                           <span className="badge pending">Default</span>
-                        )}
-                      </td>
-                    )}
+                        )
+                      ) : (
+                        businessIntros[c.id] ? (
+                          <span className="badge sent">GPT Ready</span>
+                        ) : (
+                          <span className="badge pending">Default</span>
+                        )
+                      )}
+                    </td>
                     <td>
                       {result ? (
                         result.success ? (
@@ -736,7 +845,10 @@ function App() {
               <p><strong>From:</strong> {fromEmail}</p>
               <p><strong>Subject:</strong> {subject}</p>
               {program === 'education' && aiIntros[previewContact.id] && (
-                <p className="ai-badge-meta"><strong>AI-Personalized Intro</strong></p>
+                <p className="ai-badge-meta"><strong>AI-Personalized Intro (Gemini)</strong></p>
+              )}
+              {program === 'business' && businessIntros[previewContact.id] && (
+                <p className="ai-badge-meta"><strong>AI-Personalized Intro (GPT)</strong></p>
               )}
             </div>
             <div
@@ -746,7 +858,7 @@ function App() {
                   program,
                   previewContact.full_name,
                   previewContact.job_title,
-                  aiIntros[previewContact.id] || null,
+                  program === 'business' ? (businessIntros[previewContact.id] || null) : (aiIntros[previewContact.id] || null),
                   previewContact.title
                 )
               }}
